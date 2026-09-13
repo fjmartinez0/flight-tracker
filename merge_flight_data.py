@@ -51,7 +51,7 @@ def transport_for(airport):
 # in the HTML's ANCHOR_SUPPRESSED / ANCHOR_ADDED, or the two will disagree about
 # which dates are "tracked."
 ANCHOR_SUPPRESSED = set()
-ANCHOR_ADDED = set()
+ANCHOR_ADDED = {'2026-11-05', '2026-11-12', '2026-12-17', '2027-01-07', '2027-01-14'}  # ad hoc Thursday comparisons, promoted to tracked anchors 2026-09-13
 
 
 def is_tracked_anchor(date_str):
@@ -322,9 +322,12 @@ def main():
     # Gap check against currently known tracked dates (update this list if the
     # tracked-weeks scope changes — see PROJECT_CONTEXT.md §4 for the CLI that
     # should be producing these). October was dropped from scope entirely on
-    # 2026-09-13 (already booked) — do not re-add Oct dates here.
-    expected = ['2026-11-02', '2026-11-09', '2026-11-16', '2026-11-23', '2026-11-30',
-                '2026-12-07', '2026-12-14', '2026-12-21', '2026-12-28']
+    # 2026-09-13 (already booked) — do not re-add Oct dates here. The 5 Thursday
+    # dates were promoted from ad hoc scan to full tracked anchors, also on
+    # 2026-09-13 — see ANCHOR_ADDED above.
+    expected = ['2026-11-02', '2026-11-05', '2026-11-09', '2026-11-12', '2026-11-16',
+                '2026-11-23', '2026-11-30', '2026-12-07', '2026-12-14', '2026-12-17',
+                '2026-12-21', '2026-12-28', '2027-01-07', '2027-01-14']
     present = {r['outbound_date'] for r in merged if r.get('outbound_date')}
     missing = [d for d in expected if d not in present]
     if missing:
