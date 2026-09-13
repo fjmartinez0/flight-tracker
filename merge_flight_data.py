@@ -89,6 +89,20 @@ def embed_dataset(html_text, dataset, note='embedded data from scraper run(s)'):
     return new_html
 
 
+LAST_UPDATED_SUB_RE = re.compile(r'let lastUpdated = [^;]*;[^\n]*')
+
+
+def stamp_last_updated(html_text, timestamp_iso):
+    new_html, n = LAST_UPDATED_SUB_RE.subn(
+        f"let lastUpdated = '{timestamp_iso}'; // stamped by merge_flight_data.py",
+        html_text, count=1
+    )
+    if n != 1:
+        raise ValueError('Failed to stamp lastUpdated — regex did not match exactly once. '
+                          'Has the HTML lost its `let lastUpdated = ...;` line?')
+    return new_html
+
+
 # --- Price analysis (mirrors analyze() in the HTML's <script>, exactly) -----
 
 def analyze(rows, nights):
@@ -286,17 +300,21 @@ def main():
     if collisions:
         print('  ^ This usually means you are re-ingesting a batch already merged. Check before trusting this output.')
 
+    generated_at = datetime.now().astimezone().isoformat(timespec='seconds')
+
     new_html = embed_dataset(html_text, merged)
+    new_html = stamp_last_updated(new_html, generated_at)
     with open(args.html, 'w') as f:
         f.write(new_html)
-    print(f'Wrote {args.html}')
+    print(f'Wrote {args.html} (last updated: {generated_at})')
 
     if args.trends:
         trends_text = open(args.trends).read()
         new_trends = embed_dataset(trends_text, merged)
+        new_trends = stamp_last_updated(new_trends, generated_at)
         with open(args.trends, 'w') as f:
             f.write(new_trends)
-        print(f'Wrote {args.trends}')
+        print(f'Wrote {args.trends} (last updated: {generated_at})')
 
     best_price_report(merged)
     check_anomalies(merged)
