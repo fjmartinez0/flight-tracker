@@ -14,7 +14,7 @@ LOG_FILE="$PROJECT_DIR/logs/run_$(date +%Y%m%d_%H%M%S).log"
 # EDIT THIS: your ntfy.sh topic name (see SETUP_GUIDE.txt for how to get one).
 # Leave as-is (unset/placeholder) to disable price-drop notifications entirely —
 # drops still get logged either way, just not pushed to your phone.
-NTFY_TOPIC="REPLACE_WITH_YOUR_NTFY_TOPIC"
+NTFY_TOPIC="fernando_flights_MTL_TOR"
 
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
