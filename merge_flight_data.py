@@ -27,8 +27,10 @@ If --trends is omitted, only the main dashboard file is updated.
 import argparse
 import csv
 import json
+import os
 import re
 import sys
+import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -59,6 +61,38 @@ def is_tracked_anchor(date_str):
         return False
     weekday = datetime.strptime(date_str, '%Y-%m-%d').weekday()  # Mon=0
     return weekday == 0 or date_str in ANCHOR_ADDED
+
+
+# Mirrors the exact rolling-window logic embedded in run_daily.sh's scraper
+# invocation — kept here too so the gap-check (below) validates against what
+# SHOULD have been scraped today, not a hardcoded list that silently goes stale
+# (this replaced a hardcoded `expected` list that had exactly this problem —
+# it was missing dates within two weeks of being written, see PROJECT_CONTEXT.md).
+# If the rolling-window logic ever changes in run_daily.sh, mirror the change here.
+ROLLING_WINDOW_FLOOR = datetime(2026, 11, 2).date()  # never generate dates before this
+
+
+def add_months(d, months):
+    import calendar
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return d.replace(year=year, month=month, day=day)
+
+
+def rolling_window_dates(today=None, months_ahead=5):
+    today = today or datetime.now().date()
+    days_ahead = (7 - today.weekday()) % 7  # Monday=0; 0 if today IS Monday
+    next_monday = today + timedelta(days=days_ahead)
+    start = max(next_monday, ROLLING_WINDOW_FLOOR)
+    end = add_months(today, months_ahead)
+    dates = []
+    d = start
+    while d <= end:
+        dates.append(d.isoformat())
+        d += timedelta(days=7)
+    return dates
 
 
 def iso_week_key(date_str):
@@ -270,6 +304,84 @@ def check_anomalies(dataset):
                 print(f'  ${price}: {sorted(dates)}')
 
 
+def load_snapshot(path):
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}  # corrupt/missing snapshot shouldn't crash the whole merge
+
+
+def save_snapshot(path, snapshot):
+    with open(path, 'w') as f:
+        json.dump(snapshot, f)
+
+
+def current_prices(dataset):
+    """Best (latest-run) total per tracked anchor date, for both stay lengths.
+    Keyed 'YYYY-MM-DD|N' -> price. This is what gets diffed against the previous
+    run's snapshot to detect real drops."""
+    snapshot = {}
+    for nights in (1, 2):
+        combos = analyze(dataset, nights)
+        tracked = [c for c in combos if is_tracked_anchor(c['outbound_date'])]
+        by_date = defaultdict(list)
+        for c in tracked:
+            by_date[c['outbound_date']].append(c)
+        for outbound_date, group in by_date.items():
+            best = min(c['total'] for c in group)
+            snapshot[f'{outbound_date}|{nights}'] = best
+    return snapshot
+
+
+def detect_drops(old_snapshot, new_snapshot, pct_threshold, abs_threshold):
+    """A drop counts if it clears EITHER threshold (whichever is more lenient for
+    that price point) — a $50 drop on a $200 fare is huge (25%) and should always
+    fire even if pct_threshold were set higher; a 15% drop on a $2000 fare is $300,
+    real money, and should fire even if abs_threshold were set higher. Requiring
+    both would miss real drops at either end of the price range."""
+    drops = []
+    for key, new_price in new_snapshot.items():
+        old_price = old_snapshot.get(key)
+        if old_price is None or old_price <= 0:
+            continue  # no prior data point to compare against yet
+        if new_price >= old_price:
+            continue
+        drop_abs = old_price - new_price
+        drop_pct = (drop_abs / old_price) * 100
+        if drop_pct >= pct_threshold or drop_abs >= abs_threshold:
+            date_str, nights = key.split('|')
+            drops.append({
+                'date': date_str, 'nights': int(nights),
+                'old': old_price, 'new': new_price,
+                'drop_abs': drop_abs, 'drop_pct': drop_pct,
+            })
+    drops.sort(key=lambda d: -d['drop_pct'])
+    return drops
+
+
+def send_ntfy(topic, drops):
+    lines = []
+    for d in drops:
+        lines.append(f"{d['date']} ({d['nights']}N): ${d['old']:.0f} -> ${d['new']:.0f} "
+                     f"(-${d['drop_abs']:.0f}, -{d['drop_pct']:.0f}%)")
+    body = '\n'.join(lines)
+    title = f'{len(drops)} flight price drop(s) detected'
+    req = urllib.request.Request(
+        f'https://ntfy.sh/{topic}',
+        data=body.encode('utf-8'),
+        headers={'Title': title, 'Priority': 'high', 'Tags': 'airplane,moneybag'},
+        method='POST',
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print(f'Notification sent to ntfy.sh/{topic}')
+    except Exception as e:
+        print(f'[warn] Failed to send notification: {e}')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--html', required=True, help='Path to PricingAnalysis.html (updated in place)')
@@ -277,6 +389,10 @@ def main():
     ap.add_argument('--csv', nargs='+', required=True, help='New CSV file(s) to merge in')
     ap.add_argument('--reset', action='store_true',
                      help='Discard all existing embedded data and start fresh from only the given CSVs')
+    ap.add_argument('--ntfy-topic', help='ntfy.sh topic to notify on a significant price drop (omit to skip notifications entirely)')
+    ap.add_argument('--alert-pct', type=float, default=15.0, help='Alert if a tracked date drops by at least this %% (default 15)')
+    ap.add_argument('--alert-abs', type=float, default=50.0, help='Alert if a tracked date drops by at least this $ amount (default 50)')
+    ap.add_argument('--snapshot', default='.price_snapshot.json', help='Path to the price-snapshot file used to detect drops (default: .price_snapshot.json in cwd)')
     args = ap.parse_args()
 
     html_text = open(args.html).read()
@@ -319,19 +435,41 @@ def main():
     best_price_report(merged)
     check_anomalies(merged)
 
-    # Gap check against currently known tracked dates (update this list if the
-    # tracked-weeks scope changes — see PROJECT_CONTEXT.md §4 for the CLI that
-    # should be producing these). October was dropped from scope entirely on
-    # 2026-09-13 (already booked) — do not re-add Oct dates here. The 5 Thursday
-    # dates were promoted from ad hoc scan to full tracked anchors, also on
-    # 2026-09-13 — see ANCHOR_ADDED above.
-    expected = ['2026-11-02', '2026-11-05', '2026-11-09', '2026-11-12', '2026-11-16',
-                '2026-11-23', '2026-11-30', '2026-12-07', '2026-12-14', '2026-12-17',
-                '2026-12-21', '2026-12-28', '2027-01-07', '2027-01-14']
+    # Gap check against what SHOULD have been scraped today: the rolling 5-month
+    # window (same logic as run_daily.sh — see rolling_window_dates() above) plus
+    # the 5 fixed Thursday ad hoc anchors (§6/ANCHOR_ADDED), which aren't part of
+    # the rolling window since they're one-off comparison dates, not a recurring
+    # weekly cadence. This replaced a hardcoded list that went stale within two
+    # weeks of being written (see PROJECT_CONTEXT.md) — computing it fresh each
+    # run means it can't go stale the same way again.
+    expected = rolling_window_dates() + sorted(ANCHOR_ADDED)
     present = {r['outbound_date'] for r in merged if r.get('outbound_date')}
     missing = [d for d in expected if d not in present]
     if missing:
         print(f'\nMissing expected tracked dates: {missing}')
+
+    # Price-drop detection: compare this run's best prices against the previous
+    # run's snapshot (not all-time history — specifically the run immediately
+    # before this one), so this catches real intraday drops whether running once
+    # or multiple times a day. Runs regardless of --ntfy-topic so drops are always
+    # visible in the log; only the push notification itself is conditional.
+    old_snapshot = load_snapshot(args.snapshot)
+    new_snapshot = current_prices(merged)
+    drops = detect_drops(old_snapshot, new_snapshot, args.alert_pct, args.alert_abs)
+    save_snapshot(args.snapshot, new_snapshot)
+
+    if drops:
+        print(f'\n💰 {len(drops)} price drop(s) meeting threshold (>={args.alert_pct}% or >=${args.alert_abs}):')
+        for d in drops:
+            print(f"  {d['date']} ({d['nights']}N): ${d['old']:.0f} -> ${d['new']:.0f} "
+                  f"(-${d['drop_abs']:.0f}, -{d['drop_pct']:.0f}%)")
+        if args.ntfy_topic:
+            send_ntfy(args.ntfy_topic, drops)
+        else:
+            print('  (no --ntfy-topic given — drop detected but no notification sent)')
+    elif not old_snapshot:
+        print('\n[info] No previous price snapshot found — this is the first run with '
+              'alerting enabled, nothing to compare against yet. Next run will have a baseline.')
 
 
 if __name__ == '__main__':

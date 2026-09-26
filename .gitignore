@@ -1,3 +1,4 @@
 logs/
 .DS_Store
 flights_scraper_*.csv
+.price_snapshot.json
