@@ -86,7 +86,7 @@ def rolling_window_dates(today=None, months_ahead=5):
     days_ahead = (7 - today.weekday()) % 7  # Monday=0; 0 if today IS Monday
     next_monday = today + timedelta(days=days_ahead)
     start = max(next_monday, ROLLING_WINDOW_FLOOR)
-    end = add_months(today, months_ahead)
+    end = add_months(start, months_ahead)
     dates = []
     d = start
     while d <= end:

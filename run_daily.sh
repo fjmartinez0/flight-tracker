@@ -14,7 +14,7 @@ LOG_FILE="$PROJECT_DIR/logs/run_$(date +%Y%m%d_%H%M%S).log"
 # EDIT THIS: your ntfy.sh topic name (see SETUP_GUIDE.txt for how to get one).
 # Leave as-is (unset/placeholder) to disable price-drop notifications entirely —
 # drops still get logged either way, just not pushed to your phone.
-NTFY_TOPIC="fernando_flights_MTL_TOR"
+NTFY_TOPIC="REPLACE_WITH_YOUR_NTFY_TOPIC"
 
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -42,7 +42,7 @@ next_monday = today + timedelta(days=days_ahead)
 # real time passes this date naturally; safe to leave in place indefinitely.
 FLOOR = date(2026, 11, 2)
 start = max(next_monday, FLOOR)
-end = add_months(today, 5)
+end = add_months(start, 5)
 dates = []
 d = start
 while d <= end:
