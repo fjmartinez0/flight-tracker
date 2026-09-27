@@ -45,22 +45,27 @@ def transport_for(airport):
 
 
 # --- Anchor-date exceptions ------------------------------------------------
-# Tracked weeks normally depart Monday. Holiday-shifted exceptions go here as two
-# parallel sets, mirroring the JS in PricingAnalysis.html exactly (§6 of
-# PROJECT_CONTEXT.md). Currently empty — the Oct 12/13 exception from this
-# project's October-tracking phase was removed when October was dropped from
-# scope entirely (2026-09-13). If a new exception ever comes up, add it here AND
-# in the HTML's ANCHOR_SUPPRESSED / ANCHOR_ADDED, or the two will disagree about
-# which dates are "tracked."
+# Tracked weeks normally depart Monday. The 3rd Thursday of each month is ALSO
+# tracked (1-night ad hoc comparisons) — scaled back 2026-09-27 from a full
+# weekly Thursday cadence to once/month, on the assumption prices move roughly
+# uniformly across a month, so daily/weekly Thursday sampling was overkill.
+# Uses a day-of-month range rather than computing "the 3rd Thursday" directly:
+# the Nth occurrence of any weekday always falls within a fixed day-of-month
+# window regardless of the month (3rd: days 15-21), so "Thursday AND day 15-21"
+# is exactly "the 3rd Thursday" — mirrors the HTML's JS exactly, keep in sync.
+# ANCHOR_SUPPRESSED/ANCHOR_ADDED remain available for one-off holiday exceptions
+# — currently empty since the Oct 12/13 exception was removed when October left
+# scope.
 ANCHOR_SUPPRESSED = set()
-ANCHOR_ADDED = {'2026-11-05', '2026-11-12', '2026-12-17', '2027-01-07', '2027-01-14'}  # ad hoc Thursday comparisons, promoted to tracked anchors 2026-09-13
+ANCHOR_ADDED = set()
 
 
 def is_tracked_anchor(date_str):
     if date_str in ANCHOR_SUPPRESSED:
         return False
-    weekday = datetime.strptime(date_str, '%Y-%m-%d').weekday()  # Mon=0
-    return weekday == 0 or date_str in ANCHOR_ADDED
+    d = datetime.strptime(date_str, '%Y-%m-%d').date()
+    is_third_thursday = d.weekday() == 3 and 15 <= d.day <= 21  # Thu=3
+    return d.weekday() == 0 or is_third_thursday or date_str in ANCHOR_ADDED
 
 
 # Mirrors the exact rolling-window logic embedded in run_daily.sh's scraper
@@ -81,17 +86,57 @@ def add_months(d, months):
     return d.replace(year=year, month=month, day=day)
 
 
-def rolling_window_dates(today=None, months_ahead=5):
+def first_weekday_on_or_after(d, target_weekday):
+    days_ahead = (target_weekday - d.weekday()) % 7
+    return d + timedelta(days=days_ahead)
+
+
+def rolling_dates_for_weekday(target_weekday, today=None, months_ahead=5):
+    """Shared logic for both the Monday and Thursday rolling windows. Fixes a
+    real bug found during development: naively doing max(next_date, FLOOR) only
+    works when FLOOR itself is already the target weekday (true for Monday,
+    since ROLLING_WINDOW_FLOOR is a Monday) — for any other weekday, comparing
+    a raw date against FLOOR can silently return a date of the WRONG weekday.
+    Both candidates are normalized to the target weekday before comparing."""
     today = today or datetime.now().date()
-    days_ahead = (7 - today.weekday()) % 7  # Monday=0; 0 if today IS Monday
-    next_monday = today + timedelta(days=days_ahead)
-    start = max(next_monday, ROLLING_WINDOW_FLOOR)
+    next_date = first_weekday_on_or_after(today, target_weekday)
+    floor_date = first_weekday_on_or_after(ROLLING_WINDOW_FLOOR, target_weekday)
+    start = max(next_date, floor_date)
     end = add_months(start, months_ahead)
     dates = []
     d = start
     while d <= end:
         dates.append(d.isoformat())
         d += timedelta(days=7)
+    return dates
+
+
+def rolling_window_dates(today=None, months_ahead=5):
+    return rolling_dates_for_weekday(0, today, months_ahead)  # Monday
+
+
+def third_thursday_of_month(year, month):
+    first_of_month = datetime(year, month, 1).date()
+    first_thu = first_weekday_on_or_after(first_of_month, 3)  # Thu=3
+    return first_thu + timedelta(days=14)
+
+
+def rolling_thursday_dates(today=None, months_count=6):
+    """The Thursday ad hoc comparisons — scaled back 2026-09-27 from a fixed
+    5-date list, to a full weekly rolling cadence (same day), to (finally) just
+    the 3rd Thursday of each month, on the assumption prices move roughly
+    uniformly across a month. Mirrors run_daily.sh's computation exactly — keep
+    both in sync if this logic ever changes again."""
+    today = today or datetime.now().date()
+    floor_month_start = datetime(ROLLING_WINDOW_FLOOR.year, ROLLING_WINDOW_FLOOR.month, 1).date()
+    today_month_start = datetime(today.year, today.month, 1).date()
+    candidate_month = max(today_month_start, floor_month_start)
+    dates = []
+    for i in range(months_count):
+        m = add_months(candidate_month, i)
+        thu3 = third_thursday_of_month(m.year, m.month)
+        if thu3 >= max(today, ROLLING_WINDOW_FLOOR):
+            dates.append(thu3.isoformat())
     return dates
 
 
@@ -436,13 +481,12 @@ def main():
     check_anomalies(merged)
 
     # Gap check against what SHOULD have been scraped today: the rolling 5-month
-    # window (same logic as run_daily.sh — see rolling_window_dates() above) plus
-    # the 5 fixed Thursday ad hoc anchors (§6/ANCHOR_ADDED), which aren't part of
-    # the rolling window since they're one-off comparison dates, not a recurring
-    # weekly cadence. This replaced a hardcoded list that went stale within two
-    # weeks of being written (see PROJECT_CONTEXT.md) — computing it fresh each
-    # run means it can't go stale the same way again.
-    expected = rolling_window_dates() + sorted(ANCHOR_ADDED)
+    # Monday window PLUS the rolling 5-month Thursday window (same logic as
+    # run_daily.sh — both mirror each other exactly, see rolling_dates_for_weekday()
+    # above). The Thursday list used to be a fixed 5-date enumeration that went
+    # stale in January; like the Monday list going stale before it, this is now
+    # computed fresh each run so it can't go stale the same way again.
+    expected = rolling_window_dates() + rolling_thursday_dates()
     present = {r['outbound_date'] for r in merged if r.get('outbound_date')}
     missing = [d for d in expected if d not in present]
     if missing:

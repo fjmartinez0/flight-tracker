@@ -14,7 +14,7 @@ LOG_FILE="$PROJECT_DIR/logs/run_$(date +%Y%m%d_%H%M%S).log"
 # EDIT THIS: your ntfy.sh topic name (see SETUP_GUIDE.txt for how to get one).
 # Leave as-is (unset/placeholder) to disable price-drop notifications entirely —
 # drops still get logged either way, just not pushed to your phone.
-NTFY_TOPIC="fernando_flights_MTL_TOR"
+NTFY_TOPIC="REPLACE_WITH_YOUR_NTFY_TOPIC"
 
 # Sends a push notification via ntfy.sh if a real topic is configured; silently
 # does nothing if the placeholder is still in place. Used for the unconditional
@@ -68,9 +68,43 @@ print(','.join(dates))
     --dates "$ROLLING_DATES" \
     --nights 1,2
 
-  echo "--- Ad hoc Thursday comparisons ---"
+  echo "--- Ad hoc Thursday comparisons (3rd Thursday of each month, rolling 5-6 months) ---"
+  ROLLING_THURSDAYS=$("$PYTHON" -c "
+import calendar
+from datetime import date, timedelta
+
+def add_months(d, months):
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return d.replace(year=year, month=month, day=day)
+
+def first_weekday_on_or_after(d, target_weekday):
+    days_ahead = (target_weekday - d.weekday()) % 7
+    return d + timedelta(days=days_ahead)
+
+def third_thursday_of_month(year, month):
+    first_of_month = date(year, month, 1)
+    first_thu = first_weekday_on_or_after(first_of_month, 3)  # Thu=3
+    return first_thu + timedelta(days=14)
+
+today = date.today()
+FLOOR = date(2026, 11, 2)
+floor_month_start = date(FLOOR.year, FLOOR.month, 1)
+today_month_start = date(today.year, today.month, 1)
+candidate_month = max(today_month_start, floor_month_start)
+dates = []
+for i in range(6):  # current/floor month plus 5 more, matching the Monday window's span
+    m = add_months(candidate_month, i)
+    thu3 = third_thursday_of_month(m.year, m.month)
+    if thu3 >= max(today, FLOOR):
+        dates.append(thu3.isoformat())
+print(','.join(dates))
+")
+  echo "Rolling 3rd-Thursday window: $ROLLING_THURSDAYS"
   "$PYTHON" -u yul_yyz_scraper.py \
-    --scan-dates 2026-11-05,2026-11-12,2026-12-17,2027-01-07,2027-01-14 \
+    --scan-dates "$ROLLING_THURSDAYS" \
     --nights 1
 
   echo "--- Merging today's CSVs into the dashboard ---"
