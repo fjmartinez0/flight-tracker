@@ -813,7 +813,7 @@ function renderCalendar() {
   html += `<div class="cal-months">`;
   const anchorDates = combos.filter(c => isTrackedAnchor(c.outboundDate)).map(c => c.outboundDate).sort();
   const windowStart = anchorDates.length ? new Date(anchorDates[0] + 'T00:00:00') : new Date();
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const d = new Date(windowStart.getFullYear(), windowStart.getMonth() + i, 1);
     html += monthGridHtml(d.getFullYear(), d.getMonth(), priceByMonday, minPrice, maxPrice);
   }
