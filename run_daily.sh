@@ -16,6 +16,19 @@ LOG_FILE="$PROJECT_DIR/logs/run_$(date +%Y%m%d_%H%M%S).log"
 # drops still get logged either way, just not pushed to your phone.
 NTFY_TOPIC="REPLACE_WITH_YOUR_NTFY_TOPIC"
 
+# Sends a push notification via ntfy.sh if a real topic is configured; silently
+# does nothing if the placeholder is still in place. Used for the unconditional
+# "run finished" ping below, separate from merge_flight_data.py's own
+# high-priority price-drop alerts — this one is low-priority so it doesn't feel
+# as urgent as an actual price drop, but still confirms the pipeline is alive.
+notify() {
+  local message="$1"
+  local title="$2"
+  if [ "$NTFY_TOPIC" != "REPLACE_WITH_YOUR_NTFY_TOPIC" ] && [ -n "$NTFY_TOPIC" ]; then
+    curl -s -d "$message" -H "Title: $title" -H "Priority: low" "ntfy.sh/$NTFY_TOPIC" > /dev/null 2>&1
+  fi
+}
+
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
 
@@ -66,6 +79,7 @@ print(','.join(dates))
 
   if [ -z "$NEW_CSVS" ]; then
     echo "[warn] No CSVs found matching today's date ($TODAY) — scraper may have failed silently. Check above output."
+    notify "No new data produced today ($TODAY) — check the log, the scraper may have failed." "⚠️ Flight Tracker — Run Failed"
   else
     NTFY_ARGS=""
     if [ "$NTFY_TOPIC" != "REPLACE_WITH_YOUR_NTFY_TOPIC" ] && [ -n "$NTFY_TOPIC" ]; then
@@ -86,7 +100,11 @@ print(','.join(dates))
     echo "--- Publishing to GitHub Pages ---"
     git add PricingAnalysis.html PricingAnalysisTrends.html
     git commit -m "Daily update: $(date +%Y-%m-%d)" || echo "[info] nothing to commit"
-    git push
+    if git push; then
+      notify "Dashboard updated and live: $(date +'%b %d, %I:%M %p')." "✅ Flight Tracker — Data Ready"
+    else
+      notify "git push FAILED — data was merged locally but the live dashboard was NOT updated. Check logs." "🚨 Flight Tracker — Push Failed"
+    fi
   fi
 
   echo "=== Run finished: $(date) ==="
