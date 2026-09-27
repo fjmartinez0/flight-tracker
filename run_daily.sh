@@ -11,20 +11,26 @@ PROJECT_DIR="/Users/fernandomartinez/flight-tracker"
 PYTHON="/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
 LOG_FILE="$PROJECT_DIR/logs/run_$(date +%Y%m%d_%H%M%S).log"
 
-# EDIT THIS: your ntfy.sh topic name (see SETUP_GUIDE.txt for how to get one).
-# Leave as-is (unset/placeholder) to disable price-drop notifications entirely —
-# drops still get logged either way, just not pushed to your phone.
-NTFY_TOPIC="REPLACE_WITH_YOUR_NTFY_TOPIC"
+# ntfy topic lives in a SEPARATE file, not hardcoded here — this file gets
+# regenerated every time the script changes, which kept silently wiping out the
+# real topic back to a placeholder. .ntfy_topic is a one-time, one-line file
+# that never gets touched by future deliveries of this script.
+NTFY_TOPIC_FILE="$PROJECT_DIR/.ntfy_topic"
+if [ -f "$NTFY_TOPIC_FILE" ]; then
+  NTFY_TOPIC=$(cat "$NTFY_TOPIC_FILE" | tr -d '[:space:]')
+else
+  NTFY_TOPIC=""
+fi
 
 # Sends a push notification via ntfy.sh if a real topic is configured; silently
-# does nothing if the placeholder is still in place. Used for the unconditional
-# "run finished" ping below, separate from merge_flight_data.py's own
-# high-priority price-drop alerts — this one is low-priority so it doesn't feel
-# as urgent as an actual price drop, but still confirms the pipeline is alive.
+# does nothing if .ntfy_topic doesn't exist or is empty. Used for the
+# unconditional "run finished" ping below, separate from merge_flight_data.py's
+# own high-priority price-drop alerts — this one is low-priority so it doesn't
+# feel as urgent as an actual price drop, but still confirms the pipeline is alive.
 notify() {
   local message="$1"
   local title="$2"
-  if [ "$NTFY_TOPIC" != "REPLACE_WITH_YOUR_NTFY_TOPIC" ] && [ -n "$NTFY_TOPIC" ]; then
+  if [ -n "$NTFY_TOPIC" ]; then
     curl -s -d "$message" -H "Title: $title" -H "Priority: low" "ntfy.sh/$NTFY_TOPIC" > /dev/null 2>&1
   fi
 }
@@ -116,7 +122,7 @@ print(','.join(dates))
     notify "No new data produced today ($TODAY) — check the log, the scraper may have failed." "⚠️ Flight Tracker — Run Failed"
   else
     NTFY_ARGS=""
-    if [ "$NTFY_TOPIC" != "REPLACE_WITH_YOUR_NTFY_TOPIC" ] && [ -n "$NTFY_TOPIC" ]; then
+    if [ -n "$NTFY_TOPIC" ]; then
       NTFY_ARGS="--ntfy-topic $NTFY_TOPIC"
     fi
 
