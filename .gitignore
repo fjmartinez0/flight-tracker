@@ -3,3 +3,8 @@ logs/
 flights_scraper_*.csv
 .price_snapshot.json
 .ntfy_topic
+__pycache__/
+backups/
+.signal_state.json
+*.pre_upgrade
+.publish.lock/
